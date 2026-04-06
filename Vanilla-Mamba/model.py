@@ -82,7 +82,7 @@ class MambaBlock(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        #batch, length, _ = x.shape
+        batch, length, _ = x.shape
 
         # 1. Input projection + split
         xz = self.in_proj(x)                    # (batch, length, 2 * d_inner)
