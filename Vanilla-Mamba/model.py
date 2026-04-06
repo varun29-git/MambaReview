@@ -49,7 +49,7 @@ class MambaBlock(nn.Module):
         # -----------------------------------------------------------------------
 
         # Input projection - expands + splits
-        self.in_proj = nn.Linear(d_model, self.d_inner * 2)
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
 
         # Local convolution (before SSM) 
         self.conv1d = nn.Conv1d(
