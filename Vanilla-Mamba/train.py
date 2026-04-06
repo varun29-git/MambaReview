@@ -18,7 +18,7 @@ BATCH_SIZE = 32
 SEQ_LEN = 256
 LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 0.1
-MAX_STEPS = 3000          # ~30 min on T4 with sequential scan
+MAX_STEPS = 3000         
 EVAL_INTERVAL = 250
 EVAL_STEPS = 20
 LOG_INTERVAL = 50
@@ -26,7 +26,6 @@ WARMUP_STEPS = 200
 GRAD_CLIP = 1.0
 CHECKPOINT_DIR = "checkpoints"
 
-# Model config — small enough for a T4 in 30 min
 VOCAB_SIZE = 8192         # VectorCLM tokenizer vocab size
 D_MODEL = 256
 N_LAYERS = 6
@@ -35,6 +34,7 @@ D_CONV = 4
 EXPAND = 2
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+USE_AMP = DEVICE == "cuda"  # Mixed precision only on GPU
 
 # Special token IDs (from VectorCLM tokenizer)
 UNK_ID = 0   # <UNK>
@@ -168,6 +168,9 @@ def train():
     # Loss (ignore PAD tokens)
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
 
+    # Mixed Precision
+    scaler = torch.amp.GradScaler(enabled=USE_AMP)
+
     # Training
     model.train()
     step = 0
@@ -180,7 +183,7 @@ def train():
     data_iter = batch_iterator("train", tokenizer, BATCH_SIZE, SEQ_LEN)
 
     print(f"\nStarting training for {MAX_STEPS} steps...")
-    print(f"Batch size: {BATCH_SIZE} | Seq length: {SEQ_LEN}")
+    print(f"Batch size: {BATCH_SIZE} | Seq length: {SEQ_LEN} | AMP: {USE_AMP}")
     print("-" * 60)
 
     for input_ids, labels in data_iter:
@@ -192,15 +195,18 @@ def train():
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        # Forward
-        logits = model(input_ids)
-        loss = criterion(logits.view(-1, VOCAB_SIZE), labels.view(-1))
+        # Forward (mixed precision)
+        with torch.amp.autocast(device_type=DEVICE, enabled=USE_AMP):
+            logits = model(input_ids)
+            loss = criterion(logits.view(-1, VOCAB_SIZE), labels.view(-1))
 
-        # Backward
+        # Backward (scaled gradients)
         optimizer.zero_grad()
-        loss.backward()
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
         step += 1
@@ -229,10 +235,11 @@ def train():
                 for eval_step, (eval_input, eval_label) in enumerate(eval_iter):
                     if eval_step >= EVAL_STEPS:
                         break
-                    eval_logits = model(eval_input)
-                    eval_loss += criterion(
-                        eval_logits.view(-1, VOCAB_SIZE), eval_label.view(-1)
-                    ).item()
+                    with torch.amp.autocast(device_type=DEVICE, enabled=USE_AMP):
+                        eval_logits = model(eval_input)
+                        eval_loss += criterion(
+                            eval_logits.view(-1, VOCAB_SIZE), eval_label.view(-1)
+                        ).item()
 
             eval_loss /= EVAL_STEPS
             print(f"  >> Eval loss: {eval_loss:.4f}")
