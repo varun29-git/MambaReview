@@ -156,3 +156,21 @@ if __name__ == "__main__":
     x = torch.randn(2, 20, 64)   # batch=2, seq_len=20, dim=64
     y = block(x)
     print(y.shape)   # should print torch.Size([2, 20, 64])
+
+
+
+class RMSNorm(nn.Module):
+
+    def __init__(self, d_model: int, eps: int=1e-5):
+        super.__init__()
+        self.weight = nn.Parameter(torch.ones(d_model))
+        self.eps = eps
+
+    def forward(self, x):
+        rms = torch.sqrt(x.pow(2).mean(1,keepdim=True) + self.eps)
+        x = x / rms
+        return x * self.weight
+    
+
+
+
