@@ -82,73 +82,55 @@ class MambaBlock(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        # x shape: (batch, length, d_model)
-        batch, length, _ = x.shape
+        #batch, length, _ = x.shape
 
-        # Input projection + split
+        # 1. Input projection + split
         xz = self.in_proj(x)                    # (batch, length, 2 * d_inner)
-        x, z = xz.chunk(2, dim=-1)              # split into two parts: both (batch, length, d_inner)
+        x, z = xz.chunk(2, dim=-1)              # both (batch, length, d_inner)
 
-        # Local convolution (causal)
-        x = x.transpose(1, 2)                   # Conv1d requires (batch, channels, length)
-        x = self.conv1d(x)[:, :, :length]       # apply conv + trim to original length
-        x = x.transpose(1, 2)                   # back to (batch, length, d_inner)
+        # 2. Local convolution (causal)
+        x = x.transpose(1, 2)                   
+        x = self.conv1d(x)[:, :, :length]       
+        x = x.transpose(1, 2)                   
 
-        # Gating
-        x = x * self.act(z)                     # element-wise multiply with gated z
+        # 3. Gating
+        x = x * self.act(z)                     
 
-        # Selective parameters
-        x_proj_out = self.x_proj(x)             # (batch, length, d_state*2 + 1)
+        # 4. Selective parameters (Δ, B, C)
+        x_proj_out = self.x_proj(x)             
         delta, B, C = x_proj_out.split([1, self.d_state, self.d_state], dim=-1)
 
-        delta = delta.transpose(1, 2)           # (batch, 1, length)
-        delta = self.dt_proj(delta).transpose(1, 2)  # (batch, length, d_inner)
+        delta = delta.transpose(1, 2)           
+        delta = self.dt_proj(delta).transpose(1, 2)  
         delta = F.softplus(delta)
 
-        # Prepare A
-        A = -torch.exp(self.A_log)              # (d_inner, d_state)
+        # 5. Prepare A
+        A = -torch.exp(self.A_log)              
 
-        # Selective Scan 
-        # We use associative scan trick for parallel computation
-        # But for simplicity and robustness, here is clean parallel version using cumprod
-
-        # Discretize
-        delta = torch.exp(delta)                                 # (batch, length, d_inner)
-        A_bar = torch.exp(A.unsqueeze(0).unsqueeze(0) * delta.unsqueeze(-1))  # (batch, length, d_inner, d_state)
-
-        # B_bar
-        B_bar = B.unsqueeze(-1) * delta.unsqueeze(-1)           # (batch, length, d_state, 1) * (batch, length, 1, d_inner) wait → fix
-        B_bar = B.unsqueeze(2) * delta.unsqueeze(-1)            # (batch, length, d_state, d_inner) no
-
-        # Correct B_bar
-        B_bar = B.unsqueeze(-1) * delta.unsqueeze(2)            # (batch, length, 1, d_inner) * (batch, length, d_state, 1) ? Let's do proper
-
-        # Better correct way:
-        delta_B = delta.unsqueeze(-1) * B.unsqueeze(2)          # (batch, length, d_inner, d_state)  ← this is standard
-
-        # Initialize hidden state
-        h = torch.zeros(batch, length, self.d_inner, self.d_state, device=x.device, dtype=x.dtype)
-
-        # Reset h for correct parallel scan
-        h = torch.zeros(batch, self.d_inner, self.d_state, device=x.device, dtype=x.dtype)
-
+        # 6. Selective Scan - Clean & Correct loop version
         y = torch.zeros_like(x)
+        h = torch.zeros(batch, self.d_inner, self.d_state, 
+                       device=x.device, dtype=x.dtype)
 
-        for t in range(length):   # Keep loop for now - it's correct and robust
-            xt = x[:, t]
-            dt = delta[:, t]
-            Bt = B[:, t]
-            Ct = C[:, t]
+        for t in range(length):
+            xt = x[:, t]                    # (batch, d_inner)
+            dt = delta[:, t]                # (batch, d_inner)
+            Bt = B[:, t]                    # (batch, d_state)
+            Ct = C[:, t]                    # (batch, d_state)
 
-            A_bar_t = torch.exp(A * dt.unsqueeze(-1))
-            B_bar_t = Bt.unsqueeze(1) * dt.unsqueeze(-1)
+            # Discretization
+            dt = torch.exp(dt)
+            A_bar_t = torch.exp(A * dt.unsqueeze(-1))      # (batch, d_inner, d_state)
+            B_bar_t = Bt.unsqueeze(1) * dt.unsqueeze(-1)   # (batch, d_inner, d_state)
 
+            # Update hidden state
             h = A_bar_t * h + B_bar_t * xt.unsqueeze(-1)
 
+            # Output for this token
             yt = torch.einsum('b i s, b s -> b i', h, Ct)
             y[:, t] = yt + self.D * xt
 
-        # Final projection
+        # 7. Final projection
         return self.out_proj(y)
 
 if __name__ == "__main__":
