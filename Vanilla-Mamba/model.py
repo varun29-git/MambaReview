@@ -51,7 +51,7 @@ class MambaBlock(nn.Module):
         # Input projection - expands + splits
         self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
 
-        # Local convolution (before SSM) 
+        # Local convolution 
         self.conv1d = nn.Conv1d(
             in_channels= self.d_inner,
             out_channels= self.d_inner,
@@ -61,15 +61,15 @@ class MambaBlock(nn.Module):
             bias=True          
         )
 
-        # Projection for selective parameters (Δ, B, C)
+        # Projection for parameters (Δ, B, C)
         self.x_proj = nn.Linear(self.d_inner, self.d_state * 2 +1, bias=False)
 
         # Projection for dt
         self.dt_proj = nn.Linear(1, self.d_inner, bias=True)
 
         # Parameter A
-        self.A_log = nn.Parameter(torch.empty(self.d_inner, self.d_state))
-        nn.init.normal_(self.A_log, mean=0, std=1)
+        A = torch.arange(1, self.d_state + 1, dtype=torch.float32).repeat(self.d_inner, 1)
+        self.A_log = nn.Parameter(torch.log(A))
 
         # Skip connection D
         self.D = nn.Parameter(torch.ones(self.d_inner))
@@ -84,60 +84,53 @@ class MambaBlock(nn.Module):
         
         batch, length, _ = x.shape
 
-        # 1. Input projection + split
+        # Input projection + split
         xz = self.in_proj(x)                    # (batch, length, 2 * d_inner)
         x, z = xz.chunk(2, dim=-1)              # both (batch, length, d_inner)
 
-        # 2. Local convolution (causal)
+        # Local convolution (causal)
         x = x.transpose(1, 2)                   
         x = self.conv1d(x)[:, :, :length]       
         x = x.transpose(1, 2)                   
 
-        # 3. Gating
+        # Gating
         x = x * self.act(z)                     
 
-        # 4. Selective parameters (Δ, B, C)
+        # Selective parameters (Δ, B, C)
         x_proj_out = self.x_proj(x)             
         delta, B, C = x_proj_out.split([1, self.d_state, self.d_state], dim=-1)
 
-        delta = delta.transpose(1, 2)           
-        delta = self.dt_proj(delta).transpose(1, 2)  
-        delta = F.softplus(delta)
+        # Map delta to d_inner
+        delta = self.dt_proj(delta)  # (batch, length, d_inner)
 
-        # 5. Prepare A
+        # Prepare A
         A = -torch.exp(self.A_log)              
 
-        # 6. Selective Scan - Clean & Correct loop version
-        y = torch.zeros_like(x)
-        h = torch.zeros(batch, self.d_inner, self.d_state, 
-                       device=x.device, dtype=x.dtype)
+        # Selective Scan - Native PyTorch Loop
+        delta = F.softplus(delta)
 
+        y = torch.zeros_like(x)
+        h = torch.zeros(batch, self.d_inner, self.d_state, device=x.device, dtype=x.dtype)
+    
         for t in range(length):
             xt = x[:, t]                    # (batch, d_inner)
             dt = delta[:, t]                # (batch, d_inner)
             Bt = B[:, t]                    # (batch, d_state)
             Ct = C[:, t]                    # (batch, d_state)
-
-            # Discretization
-            dt = torch.exp(dt)
+    
+            # Discretization (Zero-Order Hold)
             A_bar_t = torch.exp(A * dt.unsqueeze(-1))      # (batch, d_inner, d_state)
             B_bar_t = Bt.unsqueeze(1) * dt.unsqueeze(-1)   # (batch, d_inner, d_state)
-
+    
             # Update hidden state
             h = A_bar_t * h + B_bar_t * xt.unsqueeze(-1)
-
+    
             # Output for this token
             yt = torch.einsum('b i s, b s -> b i', h, Ct)
             y[:, t] = yt + self.D * xt
 
-        # 7. Final projection
+        # Final projection
         return self.out_proj(y)
-
-if __name__ == "__main__":
-    block = MambaBlock(d_model=64)
-    x = torch.randn(2, 20, 64)   # batch=2, seq_len=20, dim=64
-    y = block(x)
-    print(y.shape)   # should print torch.Size([2, 20, 64])
 
 
 
@@ -169,5 +162,57 @@ class MambaLayer(nn.Module):
         return x
 
 
+class MambaModel(nn.Module):
+    def __init__(self, 
+                 vocab_size: int,
+                 d_model: int,
+                 n_layers: int,
+                 d_state: int,
+                 d_conv: int,
+                 expand: int):
+        super().__init__()
+        
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        
+        # Stack of Mamba layers
+        self.layers = nn.ModuleList([
+            MambaLayer(d_model, d_state, d_conv, expand) 
+            for _ in range(n_layers)
+        ])
+        
+        self.norm_f = RMSNorm(d_model)
+        self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """
+        input_ids: (batch_size, seq_len)
+        output: logits of shape (batch_size, seq_len, vocab_size)
+        """
+        x = self.embedding(input_ids)          # (batch, seq_len, d_model)
+        
+        for layer in self.layers:
+            x = layer(x)
+        
+        x = self.norm_f(x)
+        logits = self.lm_head(x)               # (batch, seq_len, vocab_size)
+        
+        return logits
 
 
+
+
+if __name__ == "__main__":
+    # Example usage
+    model = MambaModel(
+        vocab_size=32000,
+        d_model=64,
+        n_layers=4,
+        d_state=16,
+        d_conv=4,
+        expand=2
+    )
+    
+    input_ids = torch.randint(0, 32000, (2, 20))   # batch=2, seq_len=20
+    logits = model(input_ids)
+    
+    print("Logits shape:", logits.shape)   
