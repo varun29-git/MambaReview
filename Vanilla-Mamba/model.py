@@ -182,7 +182,7 @@ class MambaLayer(nn.Module):
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         residual = x
         x = self.norm(x)
-        x = self.mamba
+        x = self.mamba(x)
         x = residual + x
         return x
 
