@@ -143,7 +143,7 @@ if __name__ == "__main__":
 
 class RMSNorm(nn.Module):
 
-    def __init__(self, d_model: int, eps: int=1e-5):
+    def __init__(self, d_model: int, eps: float=1e-5):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(d_model))
         self.eps = eps
