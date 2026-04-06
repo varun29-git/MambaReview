@@ -162,7 +162,7 @@ if __name__ == "__main__":
 class RMSNorm(nn.Module):
 
     def __init__(self, d_model: int, eps: int=1e-5):
-        super.__init__()
+        super().__init__()
         self.weight = nn.Parameter(torch.ones(d_model))
         self.eps = eps
 
@@ -171,6 +171,21 @@ class RMSNorm(nn.Module):
         x = x / rms
         return x * self.weight
     
+
+class MambaLayer(nn.Module):
+    
+    def __init__(self, d_model:int, d_state:int, d_conv:int, expand:int):
+        super().__init__()
+        self.norm = RMSNorm(d_model)
+        self.mamba = MambaBlock(d_model, d_state, d_conv, expand)
+    
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = self.norm(x)
+        x = self.mamba
+        x = residual + x
+        return x
+
 
 
 
