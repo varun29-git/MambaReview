@@ -167,7 +167,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        rms = torch.sqrt(x.pow(2).mean(1,keepdim=True) + self.eps)
+        rms = torch.sqrt(x.pow(2).mean(-1,keepdim=True) + self.eps)
         x = x / rms
         return x * self.weight
     
