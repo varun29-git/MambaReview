@@ -35,3 +35,22 @@ If you drop a batch of tokens into the model, here is the exact chronological or
 ### 6. `segsum`
 * **Purpose**: A small helper function for `ssd_minimal_discrete`.
 * **What it does**: When doing cumulative sums inside chunks, floating-point math can get weird or unstable. `segsum` calculates these cumulative segment sums cleanly while applying masks to ensure the model can never peek into the future.
+
+## The Hardware Wall (A Note on Performance & Physical Constraints)
+
+This repository is an educational artifact designed to prove mathematical comprehension of State Space Duality. **It is not a commercial inference engine.** The execution speed of this pure-PyTorch implementation will be glacial compared to official kernels, and it is critical to understand the physics of *why*.
+
+While this codebase perfectly mirrors the logic of the Mamba-2 architecture—handling correct dimensional alignment, recurrent state accumulation, and grouped-value tensor routing—it operates under a severe hardware constraint known as **High Bandwidth Memory (HBM) starvation**.
+
+### The Physics of the Bottleneck
+The default PyTorch dispatcher is built around distinct, sequential operations. When we execute the SSD algorithm using chained `torch.einsum` contractions, PyTorch behaves sequentially:
+1. It reads the massive $X$, $B$, and $C$ tensors from the GPU's HBM into the compute cores (SRAM).
+2. It calculates the intermediate states.
+3. It writes the result *back* to the HBM before the next `einsum` step can begin.
+
+State Space Duality, like FlashAttention, requires massive amounts of intermediate state calculation. By constantly transferring these intermediate states back and forth across the memory bus, we saturate the GPU's memory bandwidth. The compute cores (Tensor Cores) spend the vast majority of their time idling, waiting for data to arrive from HBM.
+
+### The Path to Production
+To achieve blistering token-generation speeds, the SSD algorithm demands **Kernel Fusion**. A custom Triton or CUDA kernel is required to keep the hidden state transitions strictly confined within the GPU's ultra-fast SRAM. A fused kernel loads the inputs from HBM *once*, computes the entire chunked recurrence matrix within SRAM, and only writes the final output back to HBM.
+
+The lack of a fused kernel here is a deliberate resource limitation to maximize readability and architectural transparency. By constructing the core SSD engine from scratch in PyTorch, we prove an understanding of the internal physics and mechanics of the algorithm, rather than merely importing a pre-built black box.
