@@ -31,3 +31,9 @@ This learning journey is guided by the following foundational papers on Mamba an
 - **Jamba: A Hybrid Transformer-Mamba Language Model**  
   *AI21 Labs*  
   [arXiv:2403.19887](https://arxiv.org/abs/2403.19887)
+
+## Tokenizer
+
+This repository uses a custom Byte-Pair Encoding (BPE) tokenizer trained specifically on the `roneneldan/TinyStories` dataset. 
+
+In order to maximize parameter efficiency for these small-scale research models, we deliberately restrict the vocabulary size to **4,096 tokens**. By shrinking the embedding matrix, the parameter budget is freed up to focus on the core Mamba architecture blocks. You can generate the tokenizer by running `python train_tokenizer.py`.
