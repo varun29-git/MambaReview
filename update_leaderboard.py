@@ -10,9 +10,9 @@ def get_average_tps(log_file):
     with open(log_file, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if 'TPS' in row:
+            if 'tps' in row:
                 try:
-                    tps_values.append(float(row['TPS']))
+                    tps_values.append(float(row['tps']))
                 except ValueError:
                     continue
                 
@@ -28,9 +28,9 @@ def get_best_ppl(eval_log_file):
     with open(eval_log_file, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if 'Val_PPL' in row:
+            if 'val_ppl' in row and row['val_ppl'] != 'N/A' and row['val_ppl'].strip() != '':
                 try:
-                    best_ppl = min(best_ppl, float(row['Val_PPL']))
+                    best_ppl = min(best_ppl, float(row['val_ppl']))
                 except ValueError:
                     continue
                 
@@ -39,21 +39,11 @@ def get_best_ppl(eval_log_file):
     return f"{best_ppl:.2f}"
 
 def update_readme():
-    mamba1_tps = get_average_tps("Vanilla-Mamba/metrics_log.csv")
-    mamba2_tps = get_average_tps("Mamba-2/metrics_log.csv")
+    mamba1_tps = get_average_tps("logs/mamba1_metrics.csv")
+    mamba2_tps = get_average_tps("logs/mamba2_metrics.csv")
     
-    mamba1_ppl = get_best_ppl("Vanilla-Mamba/eval_log.csv")
-    mamba2_ppl = get_best_ppl("Mamba-2/eval_log.csv")
-    
-    # We will also check quality_metrics.csv if available as a fallback
-    if mamba1_ppl == "N/A" and os.path.exists("quality_metrics.csv"):
-        with open("quality_metrics.csv", 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get('Model') == 'Mamba-1':
-                    mamba1_ppl = row.get('Perplexity', "N/A")
-                if row.get('Model') == 'Mamba-2':
-                    mamba2_ppl = row.get('Perplexity', "N/A")
+    mamba1_ppl = get_best_ppl("logs/mamba1_metrics.csv")
+    mamba2_ppl = get_best_ppl("logs/mamba2_metrics.csv")
     
     table = (
         "## Model Leaderboard\n\n"

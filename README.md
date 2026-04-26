@@ -43,5 +43,5 @@ In order to maximize parameter efficiency for these small-scale research models,
 | Model | Throughput (TPS) | Validation PPL |
 | :--- | :--- | :--- |
 | Vanilla Mamba | N/A | N/A |
-| Mamba-2 | N/A | N/A |
+| Mamba-2 | 66184 | 16.01 |
 
