@@ -115,7 +115,7 @@ def main():
     tokenizer = get_tokenizer()
     
     mamba1_module = load_model_class(os.path.join(os.path.dirname(__file__), "Vanilla-Mamba", "model.py"), "mamba1_model")
-    mamba2_module = load_model_class(os.path.join(os.path.dirname(__file__), "mamba-2", "model.py"), "mamba2_model")
+    mamba2_module = load_model_class(os.path.join(os.path.dirname(__file__), "Mamba-2", "model.py"), "mamba2_model")
 
     models = {
         "Mamba-1": mamba1_module.MambaModel(
@@ -132,7 +132,7 @@ def main():
     # Try to load best checkpoints if they exist
     checkpoints = {
         "Mamba-1": "Vanilla-Mamba/checkpoints/best.pt",
-        "Mamba-2": "mamba-2/checkpoints/best.pt"
+        "Mamba-2": "Mamba-2/checkpoints/best.pt"
     }
     
     results = {}

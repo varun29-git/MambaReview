@@ -40,10 +40,10 @@ def get_best_ppl(eval_log_file):
 
 def update_readme():
     mamba1_tps = get_average_tps("Vanilla-Mamba/metrics_log.csv")
-    mamba2_tps = get_average_tps("mamba-2/metrics_log.csv")
+    mamba2_tps = get_average_tps("Mamba-2/metrics_log.csv")
     
     mamba1_ppl = get_best_ppl("Vanilla-Mamba/eval_log.csv")
-    mamba2_ppl = get_best_ppl("mamba-2/eval_log.csv")
+    mamba2_ppl = get_best_ppl("Mamba-2/eval_log.csv")
     
     # We will also check quality_metrics.csv if available as a fallback
     if mamba1_ppl == "N/A" and os.path.exists("quality_metrics.csv"):
