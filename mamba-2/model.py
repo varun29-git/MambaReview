@@ -76,16 +76,15 @@ def ssd_minimal_discrete(X, A, B, C, block_len, initial_states=None):
     if initial_states is None:
         initial_states = torch.zeros_like(states[:, :1])
     else:
-        # Re-group the cached initial states
-        initial_states = rearrange(initial_states.to(torch.float32).unsqueeze(1), "b 1 (g h) p n -> b 1 g h p n", g=ngroups)
+        # initial_states is already (b, g, h, p, n), just add seq dim
+        initial_states = initial_states.to(torch.float32).unsqueeze(1)
 
     states = torch.cat([initial_states, states], dim=1)
     decay_chunk = torch.exp(segsum(F.pad(A_cumsum[:, :, :, :, -1], (1, 0))))
     new_states = torch.einsum("bghzc,bcghpn->bzghpn", decay_chunk, states)
     states, final_state = new_states[:, :-1], new_states[:, -1]
 
-    # Flatten the final state back for the cache
-    final_state = rearrange(final_state, "b g h p n -> b (g h) p n")
+    # final_state is (b, g, h, p, n), matches cache shape
 
     # 4. Off-diagonal blocks
     state_decay_out = torch.exp(A_cumsum)
@@ -107,7 +106,7 @@ def ssd_step(X_t, A_t, B_t, C_t, ssm_state):
     
     X_t = rearrange(X_t, "b (g h) p -> b g h p", g=ngroups)
     A_t = rearrange(A_t, "b (g h) -> b g h", g=ngroups)
-    ssm_state = rearrange(ssm_state, "b (g h) p n -> b g h p n", g=ngroups)
+    # ssm_state is already (b, g, h, p, n)
     
     A_exp = torch.exp(A_t) # (batch, ngroups, heads_per_group)
     
@@ -119,14 +118,14 @@ def ssd_step(X_t, A_t, B_t, C_t, ssm_state):
     
     # Re-merge
     Y_t = rearrange(Y_t, "b g h p -> b (g h) p")
-    ssm_state = rearrange(ssm_state, "b g h p n -> b (g h) p n")
+    # ssm_state remains (b, g, h, p, n)
     
     return Y_t, ssm_state
 
 class Mamba2Block(nn.Module):
     # This is the actual engine of Mamba-2. It takes input, mixes it up locally with a 1D conv,
     # projects it to get our SSM parameters (A, B, C, X), and feeds them into the SSD math.
-    def __init__(self, d_model: int, expand: int, headdim: int, d_state: int, chunk_size: int, d_conv: int):
+    def __init__(self, d_model: int, expand: int, headdim: int, d_state: int, chunk_size: int, d_conv: int, ngroups: int = 1):
         super().__init__()
         
         self.d_model = d_model
@@ -136,7 +135,7 @@ class Mamba2Block(nn.Module):
         self.d_state = d_state
         self.chunk_size = chunk_size
         self.d_conv = d_conv
-        self.ngroups = 1 # Number of groups (native sharing across heads)
+        self.ngroups = ngroups # Number of groups (native sharing across heads)
         
         # We project the input into two paths: 
         # the main SSM path (x) and a multiplicative gate path (z)
@@ -148,9 +147,9 @@ class Mamba2Block(nn.Module):
             padding=self.d_conv - 1, groups=self.d_inner, bias=True
         )
         
-        # Mamba-2 trick: instead of projecting B, C, dt, and X separately, we do it in one big fat projection
-        # This makes it way faster on the GPU
-        self.x_proj_dim = self.d_inner + self.nheads + 2 * self.ngroups * self.d_state
+        # Mamba-2 trick: instead of projecting B, C, dt separately, we do it in one big fat projection
+        # (X is just x_branch reshaped, no need to project it again)
+        self.x_proj_dim = self.nheads + 2 * self.ngroups * self.d_state
         self.x_proj = nn.Linear(self.d_inner, self.x_proj_dim, bias=False)
         
         # A small projection for dt (the step size). Needs bias.
@@ -204,13 +203,14 @@ class Mamba2Block(nn.Module):
         
         # Run our big projection and slice it up into the pieces we need
         x_proj_out = self.x_proj(x_branch)
-        X, dt, B, C = x_proj_out.split([
-            self.d_inner, self.nheads, self.ngroups * self.d_state, self.ngroups * self.d_state
+        dt, B, C = x_proj_out.split([
+            self.nheads, self.ngroups * self.d_state, self.ngroups * self.d_state
         ], dim=-1)
         
         # We no longer apply `einops.repeat` to B and C to save VRAM. 
         # The einsums natively handle `ngroups` grouping.
-        X = rearrange(X, "b l (h p) -> b l h p", h=self.nheads, p=self.headdim)
+        # X is just x_branch reshaped directly
+        X = rearrange(x_branch, "b l (h p) -> b l h p", h=self.nheads, p=self.headdim)
         dt = F.softplus(self.dt_proj(dt))
         B = rearrange(B, "b l (g n) -> b l g n", g=self.ngroups, n=self.d_state)
         C = rearrange(C, "b l (g n) -> b l g n", g=self.ngroups, n=self.d_state)
@@ -229,12 +229,13 @@ class Mamba2Block(nn.Module):
             cache.ssm_state.copy_(new_ssm_state.detach())
             Y = Y.unsqueeze(1)
         else:
+            X_scaled, A_scaled, B, C = [tensor.to(torch.float32) for tensor in (X_scaled, A_scaled, B, C)]
             pad_len = (self.chunk_size - (seqlen % self.chunk_size)) % self.chunk_size
             if pad_len > 0:
-                pad_X = torch.zeros((batch, pad_len, *X_scaled.shape[2:]), device=x.device, dtype=x.dtype)
-                pad_A = torch.zeros((batch, pad_len, *A_scaled.shape[2:]), device=x.device, dtype=x.dtype)
-                pad_B = torch.zeros((batch, pad_len, *B.shape[2:]), device=x.device, dtype=x.dtype)
-                pad_C = torch.zeros((batch, pad_len, *C.shape[2:]), device=x.device, dtype=x.dtype)
+                pad_X = torch.zeros((batch, pad_len, *X_scaled.shape[2:]), device=x.device, dtype=torch.float32)
+                pad_A = torch.zeros((batch, pad_len, *A_scaled.shape[2:]), device=x.device, dtype=torch.float32)
+                pad_B = torch.zeros((batch, pad_len, *B.shape[2:]), device=x.device, dtype=torch.float32)
+                pad_C = torch.zeros((batch, pad_len, *C.shape[2:]), device=x.device, dtype=torch.float32)
                 
                 X_scaled = torch.cat([X_scaled, pad_X], dim=1)
                 A_scaled = torch.cat([A_scaled, pad_A], dim=1)
@@ -262,10 +263,10 @@ class Mamba2Block(nn.Module):
 
 class Mamba2Layer(nn.Module):
     # A standard wrapper that handles the residual connection and normalizes the input 
-    def __init__(self, d_model: int, expand: int, headdim: int, d_state: int, chunk_size: int, d_conv: int):
+    def __init__(self, d_model: int, expand: int, headdim: int, d_state: int, chunk_size: int, d_conv: int, ngroups: int = 1):
         super().__init__()
         self.norm = RMSNorm(d_model)
-        self.mamba = Mamba2Block(d_model, expand, headdim, d_state, chunk_size, d_conv)
+        self.mamba = Mamba2Block(d_model, expand, headdim, d_state, chunk_size, d_conv, ngroups)
     
     def forward(self, x: torch.Tensor, cache: Optional[InferenceCache] = None) -> Tuple[torch.Tensor, Optional[InferenceCache]]:
         mamba_out, cache = self.mamba(self.norm(x), cache)
@@ -275,7 +276,7 @@ class Mamba2Model(nn.Module):
     # The big boss class. Sets up the word embeddings, stacks all the layers together.
     def __init__(self, vocab_size: int, d_model: int, n_layer: int, expand: int, 
                  headdim: int, d_state: int, chunk_size: int, d_conv: int, 
-                 pad_vocab_size_multiple: int = 8, tie_embeddings: bool = True):
+                 pad_vocab_size_multiple: int = 8, tie_embeddings: bool = True, ngroups: int = 1):
         super().__init__()
         
         if vocab_size % pad_vocab_size_multiple != 0:
@@ -289,11 +290,12 @@ class Mamba2Model(nn.Module):
         self.headdim = headdim
         self.nheads = self.d_inner // headdim
         self.d_state = d_state
+        self.ngroups = ngroups
         
         self.embedding = nn.Embedding(vocab_size, d_model)
         
         self.layers = nn.ModuleList([
-            Mamba2Layer(d_model, expand, headdim, d_state, chunk_size, d_conv) 
+            Mamba2Layer(d_model, expand, headdim, d_state, chunk_size, d_conv, ngroups) 
             for _ in range(n_layer)
         ])
         
@@ -308,7 +310,7 @@ class Mamba2Model(nn.Module):
         caches = {}
         for i in range(self.n_layer):
             conv_state = torch.zeros(batch_size, self.d_inner, self.d_conv, device=device, dtype=dtype)
-            ssm_state = torch.zeros(batch_size, self.nheads, self.headdim, self.d_state, device=device, dtype=dtype)
+            ssm_state = torch.zeros(batch_size, self.ngroups, self.nheads // self.ngroups, self.headdim, self.d_state, device=device, dtype=dtype)
             caches[i] = InferenceCache(conv_state=conv_state, ssm_state=ssm_state)
         return caches
 
