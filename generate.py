@@ -95,7 +95,11 @@ def main():
             d_state=D_STATE, d_conv=D_CONV, expand=EXPAND
         )
     else:
-        module = load_model_class(os.path.join("Mamba-2", "model.py"), "mamba2_model")
+        mamba2_path = os.path.join("Mamba-2", "model.py")
+        if not os.path.exists(mamba2_path):
+            mamba2_path = os.path.join("mamba-2", "model.py")
+            
+        module = load_model_class(mamba2_path, "mamba2_model")
         model = module.Mamba2Model(
             vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layer=N_LAYERS,
             expand=EXPAND, headdim=HEADDIM, d_state=D_STATE,
