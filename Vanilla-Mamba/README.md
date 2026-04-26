@@ -22,4 +22,3 @@ The training script automatically produces a checkpoint (`checkpoints/best.pt`) 
 ## Core Files
 * `model.py`: The raw PyTorch implementation of the S6 architecture and `MambaBlock`.
 * `train.py`: The training loop with integrated token-per-second (TPS) and VRAM tracking.
-* `tokenizer.json`: The 4K BPE tokenizer specifically trained on TinyStories to maximize parameter efficiency.
