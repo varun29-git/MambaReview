@@ -11,7 +11,7 @@ import csv
 # Config
 BATCH_SIZE = 16
 SEQ_LEN = 256
-VOCAB_SIZE = 8192
+VOCAB_SIZE = 4096
 EVAL_STEPS = 50
 
 D_MODEL = 256
@@ -41,9 +41,7 @@ def load_model_class(path, name):
     return module
 
 def get_tokenizer():
-    tokenizer_path = "tokenizer.json"
-    if not os.path.exists(tokenizer_path):
-        tokenizer_path = "Vanilla-Mamba/tokenizer.json"
+    tokenizer_path = "tokenizer_4k.json"
     return Tokenizer.from_file(tokenizer_path)
 
 def batch_iterator(tokenizer, batch_size, seq_len):

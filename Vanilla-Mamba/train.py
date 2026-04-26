@@ -26,7 +26,7 @@ WARMUP_STEPS = 200
 GRAD_CLIP = 1.0
 CHECKPOINT_DIR = "checkpoints"
 
-VOCAB_SIZE = 8192         # VectorCLM tokenizer vocab size
+VOCAB_SIZE = 4096         # TinyStories 4K tokenizer
 D_MODEL = 256
 N_LAYERS = 6
 D_STATE = 16
@@ -49,7 +49,10 @@ EOS_ID = 3   # <EOS>
 
 def get_tokenizer():
     """Load the custom BPE tokenizer from VectorCLM."""
-    tokenizer = Tokenizer.from_file("tokenizer.json")
+    tokenizer_path = "../tokenizer_4k.json"
+    if not os.path.exists(tokenizer_path):
+        tokenizer_path = "tokenizer_4k.json"
+    tokenizer = Tokenizer.from_file(tokenizer_path)
     return tokenizer
 
 
