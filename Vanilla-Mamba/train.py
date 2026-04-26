@@ -179,6 +179,10 @@ def train():
     start_time = time.time()
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    with open("metrics_log.csv", "w") as f:
+        f.write("Step,Loss,TPS,VRAM_Usage\n")
+    with open("eval_log.csv", "w") as f:
+        f.write("Step,Tokens_Seen,Val_Loss,Val_PPL\n")
 
     data_iter = batch_iterator("train", tokenizer, BATCH_SIZE, SEQ_LEN)
 
@@ -195,6 +199,13 @@ def train():
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
+        if DEVICE == "cuda":
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            start_event.record()
+        else:
+            t0 = time.time()
+
         # Forward (mixed precision)
         with torch.amp.autocast(device_type=DEVICE, enabled=USE_AMP):
             logits = model(input_ids)
@@ -208,6 +219,15 @@ def train():
         scaler.step(optimizer)
         scaler.update()
 
+        if DEVICE == "cuda":
+            end_event.record()
+            torch.cuda.synchronize()
+            step_time = start_event.elapsed_time(end_event) / 1000.0
+        else:
+            step_time = time.time() - t0
+
+        tps = (BATCH_SIZE * SEQ_LEN) / max(step_time, 1e-8)
+
         total_loss += loss.item()
         step += 1
 
@@ -216,13 +236,24 @@ def train():
             avg_loss = total_loss / LOG_INTERVAL
             elapsed = time.time() - start_time
             tokens_per_sec = (step * BATCH_SIZE * SEQ_LEN) / elapsed
+            
+            if DEVICE == "cuda":
+                vram = torch.cuda.memory_allocated() / (1024 ** 2)
+            else:
+                vram = 0.0
+
             print(
                 f"Step {step:>5d}/{MAX_STEPS} | "
                 f"Loss: {avg_loss:.4f} | "
                 f"LR: {lr:.2e} | "
                 f"Tok/s: {tokens_per_sec:.0f} | "
+                f"TPS: {tps:.0f} | "
+                f"VRAM: {vram:.0f}MB | "
                 f"Elapsed: {elapsed / 60:.1f}min"
             )
+            with open("metrics_log.csv", "a") as f:
+                f.write(f"{step},{avg_loss:.4f},{tps:.2f},{vram:.2f}\n")
+                
             total_loss = 0.0
 
         # Eval
@@ -242,7 +273,13 @@ def train():
                         ).item()
 
             eval_loss /= EVAL_STEPS
-            print(f"  >> Eval loss: {eval_loss:.4f}")
+            eval_ppl = math.exp(eval_loss)
+            tokens_seen = step * BATCH_SIZE * SEQ_LEN
+            
+            print(f"  >> Eval loss: {eval_loss:.4f} | PPL: {eval_ppl:.2f}")
+            
+            with open("eval_log.csv", "a") as f:
+                f.write(f"{step},{tokens_seen},{eval_loss:.4f},{eval_ppl:.4f}\n")
 
             # Save best
             if eval_loss < best_eval_loss:
