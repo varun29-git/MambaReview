@@ -1,1 +1,2 @@
 step,tokens_seen,train_loss,val_ppl,tps,vram_mb
+50,204800,80.4002,N/A,503.02,0.00

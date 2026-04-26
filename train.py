@@ -133,6 +133,8 @@ def main():
         scaler = torch.amp.GradScaler('cuda')
         
     # 3. Setup Logging
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("checkpoints", exist_ok=True)
     log_file = os.path.join("logs", f"{args.model_name}_metrics.csv")
     if not os.path.exists(log_file):
         with open(log_file, "w") as f:

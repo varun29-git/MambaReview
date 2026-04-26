@@ -115,6 +115,7 @@ def main():
         
     model = model.to(DEVICE)
     
+    os.makedirs("samples", exist_ok=True)
     out_file = os.path.join("samples", f"{args.model_name}_step{args.step}.md")
     
     md_content = f"# Samples: {args.model_name.upper()} (Step {args.step})\n\n"

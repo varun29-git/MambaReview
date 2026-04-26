@@ -60,6 +60,7 @@ def main():
     plt.legend(frameon=True, facecolor='white', edgecolor='black', fontsize=11)
     plt.tight_layout()
     
+    os.makedirs("results", exist_ok=True)
     out_path = os.path.join("results", "ppl_comparison.png")
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     print(f"Plot saved successfully to {out_path}")
