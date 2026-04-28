@@ -41,6 +41,21 @@ def load_model_class(path, name):
     spec.loader.exec_module(module)
     return module
 
+
+def resolve_checkpoint_path(model_name: str) -> str | None:
+    primary_path = os.path.join(CHECKPOINTS_DIR, f"{model_name}_best.pt")
+    fallback_paths = {
+        "mamba1": [os.path.join(MODELS_DIR, "Vanilla-Mamba", "mamba1_best.pt")],
+        "mamba2": [os.path.join(MODELS_DIR, "Mamba-2", "mamba2_best.pt")],
+        "mamba3_siso": [os.path.join(MODELS_DIR, "Mamba-3", "mamba3_siso_best.pt")],
+    }
+
+    candidate_paths = [primary_path] + fallback_paths.get(model_name, [])
+    for path in candidate_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
 def top_p_sampling(logits, top_p=0.9, temperature=0.8):
     if temperature != 1.0:
         logits = logits / temperature
@@ -123,12 +138,12 @@ def main():
         )
         model = module.Mamba3SISOModel(config)
         
-    ckpt_path = os.path.join(CHECKPOINTS_DIR, f"{args.model_name}_best.pt")
-    if os.path.exists(ckpt_path):
+    ckpt_path = resolve_checkpoint_path(args.model_name)
+    if ckpt_path is not None:
         model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
         print(f"Loaded {ckpt_path}")
     else:
-        print(f"WARNING: Checkpoint {ckpt_path} not found. Generating with untrained weights.")
+        print(f"WARNING: No checkpoint found for {args.model_name}. Generating with untrained weights.")
         
     model = model.to(DEVICE)
     

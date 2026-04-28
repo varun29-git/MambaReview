@@ -1,10 +1,22 @@
 import os
 import csv
-import matplotlib.pyplot as plt
+import tempfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS_DIR = os.path.join(REPO_ROOT, "logs")
 RESULTS_DIR = os.path.join(REPO_ROOT, "results")
+TEMP_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "mambareview-cache")
+MPLCONFIGDIR = os.path.join(TEMP_CACHE_ROOT, "matplotlib")
+XDG_CACHE_HOME = os.path.join(TEMP_CACHE_ROOT, "xdg")
+
+os.makedirs(MPLCONFIGDIR, exist_ok=True)
+os.makedirs(XDG_CACHE_HOME, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", MPLCONFIGDIR)
+os.environ.setdefault("XDG_CACHE_HOME", XDG_CACHE_HOME)
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 def read_metrics(csv_path):
     if not os.path.exists(csv_path):
