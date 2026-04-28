@@ -35,6 +35,13 @@ def read_metrics(csv_path):
     return rows
 
 
+def resolve_default_log(*candidates):
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return candidates[0]
+
+
 def extract_series(rows, x_key, y_key, skip_na=True):
     xs = []
     ys = []
@@ -49,6 +56,44 @@ def extract_series(rows, x_key, y_key, skip_na=True):
         except ValueError:
             continue
     return xs, ys
+
+
+def split_on_reset(rows, x_key):
+    segments = []
+    current = []
+    last_x = None
+
+    for row in rows:
+        x_val = row.get(x_key, "")
+        try:
+            x = float(x_val)
+        except ValueError:
+            continue
+
+        if last_x is not None and x < last_x and current:
+            segments.append(current)
+            current = []
+
+        current.append(row)
+        last_x = x
+
+    if current:
+        segments.append(current)
+
+    return segments
+
+
+def select_latest_segment(rows, x_key):
+    segments = split_on_reset(rows, x_key)
+    if len(segments) <= 1:
+        return rows
+
+    latest = segments[-1]
+    print(
+        f"Detected {len(segments)} runs in log for x_key='{x_key}'; "
+        f"plotting the latest segment with {len(latest)} rows."
+    )
+    return latest
 
 
 def style_axes(ax):
@@ -77,6 +122,7 @@ def plot_series(series_specs, x_key, y_key, xlabel, ylabel, title, out_name, x_f
     styles = ['-', '--', '-.', ':']
     for idx, spec in enumerate(series_specs):
         rows = read_metrics(spec["path"])
+        rows = select_latest_segment(rows, x_key)
         xs, ys = extract_series(rows, x_key, y_key, skip_na=skip_na)
         if not xs:
             continue
@@ -107,7 +153,13 @@ def main():
     parser.add_argument(
         "--logs",
         nargs="+",
-        default=[os.path.join(LOGS_DIR, "mamba1_metrics.csv"), os.path.join(LOGS_DIR, "mamba2_metrics.csv")],
+        default=[
+            os.path.join(LOGS_DIR, "mamba1_metrics.csv"),
+            resolve_default_log(
+                os.path.join(LOGS_DIR, "mamba2_lr05x_warm2x_metrics.csv"),
+                os.path.join(LOGS_DIR, "mamba2_metrics.csv"),
+            ),
+        ],
     )
     parser.add_argument("--labels", nargs="+", default=None)
     args = parser.parse_args()

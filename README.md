@@ -38,11 +38,28 @@ This repository uses a custom Byte-Pair Encoding (BPE) tokenizer trained specifi
 
 In order to maximize parameter efficiency for these small-scale research models, we deliberately restrict the vocabulary size to **4,096 tokens**. By shrinking the embedding matrix, the parameter budget is freed up to focus on the core Mamba architecture blocks. You can generate the tokenizer by running `python3 scripts/train_tokenizer.py`.
 
+## Experiment Note
+
+The next comparison run should be treated as the main apples-to-apples benchmark. The earlier `Mamba-1` vs `Mamba-2` numbers were collected from mismatched model sizes, which made the chart more misleading than useful. The current training scripts now keep per-model configs so `Mamba-2` can be retrained at a closer parameter budget to the `Mamba-1` baseline.
+
+Useful experiment controls now available in `scripts/train.py`:
+
+- `--lr_scale` for small learning-rate sweeps
+- `--warmup_multiplier` for longer or shorter warmup
+- `--run_tag` so sweep runs write separate logs and checkpoints
+- `--resume_log` when you intentionally want to append to an existing metrics file
+- `--untie_embeddings` for the Mamba-2 tying ablation
+
+The plotting script now generates:
+
+- validation perplexity vs tokens
+- training loss vs tokens
+- validation perplexity vs wall-clock time when the log file contains elapsed-time data
+
 ## Model Leaderboard
 
 | Model | Throughput (TPS) | Validation PPL |
 | :--- | :--- | :--- |
 | Vanilla Mamba | 2149 | 10.57 |
-| Mamba-2 | 66184 | 16.01 |
+| Mamba-2 | 61288 | 17.67 |
 | Mamba-3 SISO | N/A | N/A |
-

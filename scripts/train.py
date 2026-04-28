@@ -84,6 +84,18 @@ def build_run_name(model_name: str, run_tag: str | None) -> str:
     return model_name if not run_tag else f"{model_name}_{run_tag}"
 
 
+def init_log_file(log_file: str, resume_log: bool) -> None:
+    if os.path.exists(log_file) and not resume_log:
+        raise FileExistsError(
+            f"Log file already exists at {log_file}. "
+            "Pick a new --run_tag or pass --resume_log to append intentionally."
+        )
+
+    if not os.path.exists(log_file):
+        with open(log_file, "w") as f:
+            f.write("step,tokens_seen,train_loss,val_ppl,tps,vram_mb,elapsed_seconds,lr\n")
+
+
 def build_lr_schedule(step: int, total_steps: int, warmup_steps: int, min_lr_ratio: float) -> float:
     if step < warmup_steps:
         return (step + 1) / max(warmup_steps, 1)
@@ -104,6 +116,7 @@ def main():
     parser.add_argument("--min_lr_ratio", type=float, default=TRAIN_CONFIG.min_lr_ratio)
     parser.add_argument("--run_tag", type=str, default=None)
     parser.add_argument("--untie_embeddings", action="store_true")
+    parser.add_argument("--resume_log", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -180,9 +193,7 @@ def main():
     os.makedirs(LOGS_DIR, exist_ok=True)
     os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
     log_file = os.path.join(LOGS_DIR, f"{run_name}_metrics.csv")
-    if not os.path.exists(log_file):
-        with open(log_file, "w") as f:
-            f.write("step,tokens_seen,train_loss,val_ppl,tps,vram_mb,elapsed_seconds,lr\n")
+    init_log_file(log_file, resume_log=args.resume_log)
 
     train_iter = batch_iterator("train", tokenizer, TRAIN_CONFIG.batch_size, TRAIN_CONFIG.seq_len)
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
