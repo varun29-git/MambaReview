@@ -2,7 +2,7 @@ import os
 import time
 import argparse
 import random
-import csv
+import math
 import torch
 import torch.nn as nn
 from datasets import load_dataset
@@ -10,33 +10,13 @@ from tokenizers import Tokenizer
 import importlib.util
 
 from eval_utils import compute_perplexity
+from model_configs import MODEL_CONFIGS, TRAIN_CONFIG
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(REPO_ROOT, "models")
 LOGS_DIR = os.path.join(REPO_ROOT, "logs")
 CHECKPOINTS_DIR = os.path.join(REPO_ROOT, "checkpoints")
 TOKENIZER_PATH = os.path.join(REPO_ROOT, "tokenizer_4k.json")
-
-# Hyperparameters
-BATCH_SIZE = 16
-SEQ_LEN = 256
-VOCAB_SIZE = 4096
-MAX_STEPS = 5000
-LR = 1e-3
-WARMUP_STEPS = 100
-GRAD_CLIP = 1.0
-
-# Architecture common
-D_MODEL = 256
-N_LAYERS = 6
-D_STATE = 16
-D_CONV = 4
-EXPAND = 2
-
-# Mamba-2 specific
-HEADDIM = 64
-CHUNK_SIZE = 64
-NGROUPS = 1
 
 # System config
 DEVICE = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -99,14 +79,39 @@ def batch_iterator(split, tokenizer, batch_size, seq_len):
                 batch_inputs = []
                 batch_labels = []
 
+
+def build_run_name(model_name: str, run_tag: str | None) -> str:
+    return model_name if not run_tag else f"{model_name}_{run_tag}"
+
+
+def build_lr_schedule(step: int, total_steps: int, warmup_steps: int, min_lr_ratio: float) -> float:
+    if step < warmup_steps:
+        return (step + 1) / max(warmup_steps, 1)
+
+    if total_steps <= warmup_steps:
+        return 1.0
+
+    decay_progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * decay_progress))
+    return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, required=True, choices=["mamba1", "mamba2", "mamba3_siso"])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--lr_scale", type=float, default=1.0)
+    parser.add_argument("--warmup_multiplier", type=float, default=1.0)
+    parser.add_argument("--min_lr_ratio", type=float, default=TRAIN_CONFIG.min_lr_ratio)
+    parser.add_argument("--run_tag", type=str, default=None)
+    parser.add_argument("--untie_embeddings", action="store_true")
     args = parser.parse_args()
 
     set_seed(args.seed)
-    print(f"Starting run for {args.model_name} with seed {args.seed} on {DEVICE}")
+    run_name = build_run_name(args.model_name, args.run_tag)
+    print(f"Starting run for {run_name} with seed {args.seed} on {DEVICE}")
+    model_cfg = MODEL_CONFIGS[args.model_name]
+    lr = TRAIN_CONFIG.lr * args.lr_scale
+    warmup_steps = max(1, int(TRAIN_CONFIG.warmup_steps * args.warmup_multiplier))
 
     # 1. Tokenizer Setup & Diagnostic
     tokenizer = get_tokenizer()
@@ -116,8 +121,12 @@ def main():
     if args.model_name == "mamba1":
         module = load_model_class(os.path.join(MODELS_DIR, "Vanilla-Mamba", "model.py"), "mamba1_model")
         model = module.MambaModel(
-            vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layers=N_LAYERS,
-            d_state=D_STATE, d_conv=D_CONV, expand=EXPAND
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layers=model_cfg.n_layers,
+            d_state=model_cfg.d_state,
+            d_conv=model_cfg.d_conv,
+            expand=model_cfg.expand,
         )
     elif args.model_name == "mamba2":
         mamba2_path = os.path.join(MODELS_DIR, "Mamba-2", "model.py")
@@ -126,26 +135,43 @@ def main():
             
         module = load_model_class(mamba2_path, "mamba2_model")
         model = module.Mamba2Model(
-            vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layer=N_LAYERS,
-            expand=EXPAND, headdim=HEADDIM, d_state=D_STATE,
-            chunk_size=CHUNK_SIZE, d_conv=D_CONV, ngroups=NGROUPS
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layer=model_cfg.n_layers,
+            expand=model_cfg.expand,
+            headdim=model_cfg.headdim,
+            d_state=model_cfg.d_state,
+            chunk_size=model_cfg.chunk_size,
+            d_conv=model_cfg.d_conv,
+            ngroups=model_cfg.ngroups,
+            tie_embeddings=not args.untie_embeddings,
         )
     else:
         # Mamba-3 lives behind the same CLI switch pattern as the other models.
         module = load_model_class(os.path.join(MODELS_DIR, "Mamba-3", "model.py"), "mamba3_model")
         config = module.Mamba3Config(
-            vocab_size=VOCAB_SIZE,
-            d_model=D_MODEL,
-            n_layers=N_LAYERS,
-            d_state=D_STATE,
-            d_conv=D_CONV,
-            expand=EXPAND,
-            headdim=HEADDIM,
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layers=model_cfg.n_layers,
+            d_state=model_cfg.d_state,
+            d_conv=model_cfg.d_conv,
+            expand=model_cfg.expand,
+            headdim=model_cfg.headdim,
+            tie_embeddings=model_cfg.tie_embeddings,
         )
         model = module.Mamba3SISOModel(config)
         
     model = model.to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda step: build_lr_schedule(
+            step=step,
+            total_steps=TRAIN_CONFIG.max_steps,
+            warmup_steps=warmup_steps,
+            min_lr_ratio=args.min_lr_ratio,
+        ),
+    )
     
     if USE_AMP:
         scaler = torch.amp.GradScaler('cuda')
@@ -153,27 +179,28 @@ def main():
     # 3. Setup Logging
     os.makedirs(LOGS_DIR, exist_ok=True)
     os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
-    log_file = os.path.join(LOGS_DIR, f"{args.model_name}_metrics.csv")
+    log_file = os.path.join(LOGS_DIR, f"{run_name}_metrics.csv")
     if not os.path.exists(log_file):
         with open(log_file, "w") as f:
-            f.write("step,tokens_seen,train_loss,val_ppl,tps,vram_mb\n")
+            f.write("step,tokens_seen,train_loss,val_ppl,tps,vram_mb,elapsed_seconds,lr\n")
 
-    train_iter = batch_iterator("train", tokenizer, BATCH_SIZE, SEQ_LEN)
+    train_iter = batch_iterator("train", tokenizer, TRAIN_CONFIG.batch_size, TRAIN_CONFIG.seq_len)
     criterion = nn.CrossEntropyLoss(ignore_index=PAD_ID)
 
     tokens_seen = 0
     last_log_tokens = 0
     total_train_loss = 0.0
     steps_since_log = 0
+    train_start_time = time.time()
     
     print("\nTraining...")
     model.train()
     
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(1, TRAIN_CONFIG.max_steps + 1):
         try:
             inputs, labels = next(train_iter)
         except StopIteration:
-            train_iter = batch_iterator("train", tokenizer, BATCH_SIZE, SEQ_LEN)
+            train_iter = batch_iterator("train", tokenizer, TRAIN_CONFIG.batch_size, TRAIN_CONFIG.seq_len)
             inputs, labels = next(train_iter)
             
         inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
@@ -188,20 +215,22 @@ def main():
         if USE_AMP:
             with torch.amp.autocast(device_type="cuda"):
                 logits = model(inputs)
-                loss = criterion(logits.view(-1, VOCAB_SIZE), labels.view(-1))
+                loss = criterion(logits.view(-1, TRAIN_CONFIG.vocab_size), labels.view(-1))
             optimizer.zero_grad()
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), TRAIN_CONFIG.grad_clip)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
         else:
             logits = model(inputs)
-            loss = criterion(logits.view(-1, VOCAB_SIZE), labels.view(-1))
+            loss = criterion(logits.view(-1, TRAIN_CONFIG.vocab_size), labels.view(-1))
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), TRAIN_CONFIG.grad_clip)
             optimizer.step()
+            scheduler.step()
 
         if DEVICE == "cuda":
             end_event.record()
@@ -211,31 +240,33 @@ def main():
             step_time = max(time.time() - t0, 1e-8)
 
         # Metrics
-        batch_tokens = BATCH_SIZE * SEQ_LEN
+        batch_tokens = TRAIN_CONFIG.batch_size * TRAIN_CONFIG.seq_len
         tokens_seen += batch_tokens
         total_train_loss += loss.item()
         steps_since_log += 1
         tps = batch_tokens / max(step_time, 1e-8)
+        elapsed_seconds = time.time() - train_start_time
+        current_lr = optimizer.param_groups[0]["lr"]
 
         # 4. Fixed Checkpoint Evaluation (Every 2M tokens)
-        if tokens_seen - last_log_tokens >= 2_000_000 or step == MAX_STEPS:
+        if tokens_seen - last_log_tokens >= 2_000_000 or step == TRAIN_CONFIG.max_steps:
             avg_train_loss = total_train_loss / max(steps_since_log, 1)
             
             # Run Validation
-            val_iter = batch_iterator("validation", tokenizer, BATCH_SIZE, SEQ_LEN)
-            val_ppl, _ = compute_perplexity(model, val_iter, DEVICE, max_batches=50, vocab_size=VOCAB_SIZE, pad_id=PAD_ID)
+            val_iter = batch_iterator("validation", tokenizer, TRAIN_CONFIG.batch_size, TRAIN_CONFIG.seq_len)
+            val_ppl, _ = compute_perplexity(model, val_iter, DEVICE, max_batches=50, vocab_size=TRAIN_CONFIG.vocab_size, pad_id=PAD_ID)
             
             vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2) if DEVICE == "cuda" else 0.0
             
-            print(f"Step {step}/{MAX_STEPS} | Tokens: {tokens_seen/1e6:.1f}M | "
+            print(f"Step {step}/{TRAIN_CONFIG.max_steps} | Tokens: {tokens_seen/1e6:.1f}M | "
                   f"Train Loss: {avg_train_loss:.4f} | Val PPL: {val_ppl:.2f} | "
                   f"TPS: {tps:.0f} | VRAM: {vram_mb:.0f}MB")
                   
             with open(log_file, "a") as f:
-                f.write(f"{step},{tokens_seen},{avg_train_loss:.4f},{val_ppl:.4f},{tps:.2f},{vram_mb:.2f}\n")
+                f.write(f"{step},{tokens_seen},{avg_train_loss:.4f},{val_ppl:.4f},{tps:.2f},{vram_mb:.2f},{elapsed_seconds:.2f},{current_lr:.8f}\n")
                 
             # Save Checkpoint
-            torch.save(model.state_dict(), os.path.join(CHECKPOINTS_DIR, f"{args.model_name}_best.pt"))
+            torch.save(model.state_dict(), os.path.join(CHECKPOINTS_DIR, f"{run_name}_best.pt"))
             
             # Reset counters
             last_log_tokens = tokens_seen
@@ -248,11 +279,11 @@ def main():
             avg_train_loss = total_train_loss / max(steps_since_log, 1)
             vram_mb = torch.cuda.max_memory_allocated() / (1024 ** 2) if DEVICE == "cuda" else 0.0
             
-            print(f"Step {step}/{MAX_STEPS} | Tokens: {tokens_seen/1e6:.1f}M | "
+            print(f"Step {step}/{TRAIN_CONFIG.max_steps} | Tokens: {tokens_seen/1e6:.1f}M | "
                   f"Train Loss: {avg_train_loss:.4f} | TPS: {tps:.0f} | VRAM: {vram_mb:.0f}MB")
                   
             with open(log_file, "a") as f:
-                f.write(f"{step},{tokens_seen},{avg_train_loss:.4f},N/A,{tps:.2f},{vram_mb:.2f}\n")
+                f.write(f"{step},{tokens_seen},{avg_train_loss:.4f},N/A,{tps:.2f},{vram_mb:.2f},{elapsed_seconds:.2f},{current_lr:.8f}\n")
                 
             total_train_loss = 0.0
             steps_since_log = 0

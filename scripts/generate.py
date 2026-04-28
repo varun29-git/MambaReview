@@ -4,23 +4,13 @@ import torch
 import torch.nn.functional as F
 from tokenizers import Tokenizer
 import importlib.util
+from model_configs import MODEL_CONFIGS, TRAIN_CONFIG
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(REPO_ROOT, "models")
 CHECKPOINTS_DIR = os.path.join(REPO_ROOT, "checkpoints")
 SAMPLES_DIR = os.path.join(REPO_ROOT, "samples")
 TOKENIZER_PATH = os.path.join(REPO_ROOT, "tokenizer_4k.json")
-
-# Config
-VOCAB_SIZE = 4096
-D_MODEL = 256
-N_LAYERS = 6
-D_STATE = 16
-D_CONV = 4
-EXPAND = 2
-HEADDIM = 64
-CHUNK_SIZE = 64
-NGROUPS = 1
 
 BOS_ID = 2
 EOS_ID = 3
@@ -55,6 +45,10 @@ def resolve_checkpoint_path(model_name: str) -> str | None:
         if os.path.exists(path):
             return path
     return None
+
+
+def build_run_name(model_name: str, run_tag: str | None) -> str:
+    return model_name if not run_tag else f"{model_name}_{run_tag}"
 
 def top_p_sampling(logits, top_p=0.9, temperature=0.8):
     if temperature != 1.0:
@@ -104,15 +98,23 @@ def main():
     parser.add_argument("--step", type=int, default=5000)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--run_tag", type=str, default=None)
+    parser.add_argument("--untie_embeddings", action="store_true")
     args = parser.parse_args()
+    model_cfg = MODEL_CONFIGS[args.model_name]
+    run_name = build_run_name(args.model_name, args.run_tag)
 
     tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
 
     if args.model_name == "mamba1":
         module = load_model_class(os.path.join(MODELS_DIR, "Vanilla-Mamba", "model.py"), "mamba1_model")
         model = module.MambaModel(
-            vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layers=N_LAYERS,
-            d_state=D_STATE, d_conv=D_CONV, expand=EXPAND
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layers=model_cfg.n_layers,
+            d_state=model_cfg.d_state,
+            d_conv=model_cfg.d_conv,
+            expand=model_cfg.expand,
         )
     elif args.model_name == "mamba2":
         mamba2_path = os.path.join(MODELS_DIR, "Mamba-2", "model.py")
@@ -121,24 +123,34 @@ def main():
             
         module = load_model_class(mamba2_path, "mamba2_model")
         model = module.Mamba2Model(
-            vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layer=N_LAYERS,
-            expand=EXPAND, headdim=HEADDIM, d_state=D_STATE,
-            chunk_size=CHUNK_SIZE, d_conv=D_CONV, ngroups=NGROUPS
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layer=model_cfg.n_layers,
+            expand=model_cfg.expand,
+            headdim=model_cfg.headdim,
+            d_state=model_cfg.d_state,
+            chunk_size=model_cfg.chunk_size,
+            d_conv=model_cfg.d_conv,
+            ngroups=model_cfg.ngroups,
+            tie_embeddings=not args.untie_embeddings,
         )
     else:
         module = load_model_class(os.path.join(MODELS_DIR, "Mamba-3", "model.py"), "mamba3_model")
         config = module.Mamba3Config(
-            vocab_size=VOCAB_SIZE,
-            d_model=D_MODEL,
-            n_layers=N_LAYERS,
-            d_state=D_STATE,
-            d_conv=D_CONV,
-            expand=EXPAND,
-            headdim=HEADDIM,
+            vocab_size=TRAIN_CONFIG.vocab_size,
+            d_model=model_cfg.d_model,
+            n_layers=model_cfg.n_layers,
+            d_state=model_cfg.d_state,
+            d_conv=model_cfg.d_conv,
+            expand=model_cfg.expand,
+            headdim=model_cfg.headdim,
+            tie_embeddings=model_cfg.tie_embeddings,
         )
         model = module.Mamba3SISOModel(config)
         
-    ckpt_path = resolve_checkpoint_path(args.model_name)
+    ckpt_path = resolve_checkpoint_path(run_name)
+    if ckpt_path is None:
+        ckpt_path = resolve_checkpoint_path(args.model_name)
     if ckpt_path is not None:
         model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
         print(f"Loaded {ckpt_path}")
@@ -148,9 +160,9 @@ def main():
     model = model.to(DEVICE)
     
     os.makedirs(SAMPLES_DIR, exist_ok=True)
-    out_file = os.path.join(SAMPLES_DIR, f"{args.model_name}_step{args.step}.md")
+    out_file = os.path.join(SAMPLES_DIR, f"{run_name}_step{args.step}.md")
     
-    md_content = f"# Samples: {args.model_name.upper()} (Step {args.step})\n\n"
+    md_content = f"# Samples: {run_name.upper()} (Step {args.step})\n\n"
     md_content += f"**Settings**: Temperature = {args.temperature}, Top-P = {args.top_p}\n\n"
     
     for prompt in PROMPTS:
