@@ -5,6 +5,12 @@ import torch.nn.functional as F
 from tokenizers import Tokenizer
 import importlib.util
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(REPO_ROOT, "models")
+CHECKPOINTS_DIR = os.path.join(REPO_ROOT, "checkpoints")
+SAMPLES_DIR = os.path.join(REPO_ROOT, "samples")
+TOKENIZER_PATH = os.path.join(REPO_ROOT, "tokenizer_4k.json")
+
 # Config
 VOCAB_SIZE = 4096
 D_MODEL = 256
@@ -79,25 +85,24 @@ def generate_text(model, tokenizer, prompt, max_tokens=100, temperature=0.8, top
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, required=True, choices=["mamba1", "mamba2"])
+    parser.add_argument("--model_name", type=str, required=True, choices=["mamba1", "mamba2", "mamba3_siso"])
     parser.add_argument("--step", type=int, default=5000)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=0.9)
     args = parser.parse_args()
 
-    tokenizer_path = "tokenizer_4k.json"
-    tokenizer = Tokenizer.from_file(tokenizer_path)
+    tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
 
     if args.model_name == "mamba1":
-        module = load_model_class(os.path.join("Vanilla-Mamba", "model.py"), "mamba1_model")
+        module = load_model_class(os.path.join(MODELS_DIR, "Vanilla-Mamba", "model.py"), "mamba1_model")
         model = module.MambaModel(
             vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layers=N_LAYERS,
             d_state=D_STATE, d_conv=D_CONV, expand=EXPAND
         )
-    else:
-        mamba2_path = os.path.join("Mamba-2", "model.py")
+    elif args.model_name == "mamba2":
+        mamba2_path = os.path.join(MODELS_DIR, "Mamba-2", "model.py")
         if not os.path.exists(mamba2_path):
-            mamba2_path = os.path.join("mamba-2", "model.py")
+            mamba2_path = os.path.join(MODELS_DIR, "mamba-2", "model.py")
             
         module = load_model_class(mamba2_path, "mamba2_model")
         model = module.Mamba2Model(
@@ -105,8 +110,20 @@ def main():
             expand=EXPAND, headdim=HEADDIM, d_state=D_STATE,
             chunk_size=CHUNK_SIZE, d_conv=D_CONV, ngroups=NGROUPS
         )
+    else:
+        module = load_model_class(os.path.join(MODELS_DIR, "Mamba-3", "model.py"), "mamba3_model")
+        config = module.Mamba3Config(
+            vocab_size=VOCAB_SIZE,
+            d_model=D_MODEL,
+            n_layers=N_LAYERS,
+            d_state=D_STATE,
+            d_conv=D_CONV,
+            expand=EXPAND,
+            headdim=HEADDIM,
+        )
+        model = module.Mamba3SISOModel(config)
         
-    ckpt_path = os.path.join("checkpoints", f"{args.model_name}_best.pt")
+    ckpt_path = os.path.join(CHECKPOINTS_DIR, f"{args.model_name}_best.pt")
     if os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=DEVICE))
         print(f"Loaded {ckpt_path}")
@@ -115,8 +132,8 @@ def main():
         
     model = model.to(DEVICE)
     
-    os.makedirs("samples", exist_ok=True)
-    out_file = os.path.join("samples", f"{args.model_name}_step{args.step}.md")
+    os.makedirs(SAMPLES_DIR, exist_ok=True)
+    out_file = os.path.join(SAMPLES_DIR, f"{args.model_name}_step{args.step}.md")
     
     md_content = f"# Samples: {args.model_name.upper()} (Step {args.step})\n\n"
     md_content += f"**Settings**: Temperature = {args.temperature}, Top-P = {args.top_p}\n\n"

@@ -11,6 +11,12 @@ import importlib.util
 
 from eval_utils import compute_perplexity
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(REPO_ROOT, "models")
+LOGS_DIR = os.path.join(REPO_ROOT, "logs")
+CHECKPOINTS_DIR = os.path.join(REPO_ROOT, "checkpoints")
+TOKENIZER_PATH = os.path.join(REPO_ROOT, "tokenizer_4k.json")
+
 # Hyperparameters
 BATCH_SIZE = 16
 SEQ_LEN = 256
@@ -54,10 +60,9 @@ def load_model_class(path, name):
     return module
 
 def get_tokenizer():
-    tokenizer_path = "tokenizer_4k.json"
-    if not os.path.exists(tokenizer_path):
-        raise FileNotFoundError(f"Tokenizer not found at {tokenizer_path}")
-    return Tokenizer.from_file(tokenizer_path)
+    if not os.path.exists(TOKENIZER_PATH):
+        raise FileNotFoundError(f"Tokenizer not found at {TOKENIZER_PATH}")
+    return Tokenizer.from_file(TOKENIZER_PATH)
 
 def test_tokenizer(tokenizer):
     test_sentence = "Once upon a time, there was a little girl."
@@ -96,7 +101,7 @@ def batch_iterator(split, tokenizer, batch_size, seq_len):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, required=True, choices=["mamba1", "mamba2"])
+    parser.add_argument("--model_name", type=str, required=True, choices=["mamba1", "mamba2", "mamba3_siso"])
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -109,15 +114,15 @@ def main():
 
     # 2. Model Initialization
     if args.model_name == "mamba1":
-        module = load_model_class(os.path.join("Vanilla-Mamba", "model.py"), "mamba1_model")
+        module = load_model_class(os.path.join(MODELS_DIR, "Vanilla-Mamba", "model.py"), "mamba1_model")
         model = module.MambaModel(
             vocab_size=VOCAB_SIZE, d_model=D_MODEL, n_layers=N_LAYERS,
             d_state=D_STATE, d_conv=D_CONV, expand=EXPAND
         )
-    else:
-        mamba2_path = os.path.join("Mamba-2", "model.py")
+    elif args.model_name == "mamba2":
+        mamba2_path = os.path.join(MODELS_DIR, "Mamba-2", "model.py")
         if not os.path.exists(mamba2_path):
-            mamba2_path = os.path.join("mamba-2", "model.py")
+            mamba2_path = os.path.join(MODELS_DIR, "mamba-2", "model.py")
             
         module = load_model_class(mamba2_path, "mamba2_model")
         model = module.Mamba2Model(
@@ -125,6 +130,19 @@ def main():
             expand=EXPAND, headdim=HEADDIM, d_state=D_STATE,
             chunk_size=CHUNK_SIZE, d_conv=D_CONV, ngroups=NGROUPS
         )
+    else:
+        # Mamba-3 lives behind the same CLI switch pattern as the other models.
+        module = load_model_class(os.path.join(MODELS_DIR, "Mamba-3", "model.py"), "mamba3_model")
+        config = module.Mamba3Config(
+            vocab_size=VOCAB_SIZE,
+            d_model=D_MODEL,
+            n_layers=N_LAYERS,
+            d_state=D_STATE,
+            d_conv=D_CONV,
+            expand=EXPAND,
+            headdim=HEADDIM,
+        )
+        model = module.Mamba3SISOModel(config)
         
     model = model.to(DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
@@ -133,9 +151,9 @@ def main():
         scaler = torch.amp.GradScaler('cuda')
         
     # 3. Setup Logging
-    os.makedirs("logs", exist_ok=True)
-    os.makedirs("checkpoints", exist_ok=True)
-    log_file = os.path.join("logs", f"{args.model_name}_metrics.csv")
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    os.makedirs(CHECKPOINTS_DIR, exist_ok=True)
+    log_file = os.path.join(LOGS_DIR, f"{args.model_name}_metrics.csv")
     if not os.path.exists(log_file):
         with open(log_file, "w") as f:
             f.write("step,tokens_seen,train_loss,val_ppl,tps,vram_mb\n")
@@ -217,7 +235,7 @@ def main():
                 f.write(f"{step},{tokens_seen},{avg_train_loss:.4f},{val_ppl:.4f},{tps:.2f},{vram_mb:.2f}\n")
                 
             # Save Checkpoint
-            torch.save(model.state_dict(), os.path.join("checkpoints", f"{args.model_name}_best.pt"))
+            torch.save(model.state_dict(), os.path.join(CHECKPOINTS_DIR, f"{args.model_name}_best.pt"))
             
             # Reset counters
             last_log_tokens = tokens_seen

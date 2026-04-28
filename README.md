@@ -36,7 +36,7 @@ This learning journey is guided by the following foundational papers on Mamba an
 
 This repository uses a custom Byte-Pair Encoding (BPE) tokenizer trained specifically on the `roneneldan/TinyStories` dataset. 
 
-In order to maximize parameter efficiency for these small-scale research models, we deliberately restrict the vocabulary size to **4,096 tokens**. By shrinking the embedding matrix, the parameter budget is freed up to focus on the core Mamba architecture blocks. You can generate the tokenizer by running `python train_tokenizer.py`.
+In order to maximize parameter efficiency for these small-scale research models, we deliberately restrict the vocabulary size to **4,096 tokens**. By shrinking the embedding matrix, the parameter budget is freed up to focus on the core Mamba architecture blocks. You can generate the tokenizer by running `python3 scripts/train_tokenizer.py`.
 
 ## Model Leaderboard
 
@@ -44,4 +44,5 @@ In order to maximize parameter efficiency for these small-scale research models,
 | :--- | :--- | :--- |
 | Vanilla Mamba | N/A | N/A |
 | Mamba-2 | 66184 | 16.01 |
+| Mamba-3 SISO | N/A | N/A |
 

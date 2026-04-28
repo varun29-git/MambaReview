@@ -2,6 +2,10 @@ import os
 import csv
 import re
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGS_DIR = os.path.join(REPO_ROOT, "logs")
+README_PATH = os.path.join(REPO_ROOT, "README.md")
+
 def get_average_tps(log_file):
     if not os.path.exists(log_file):
         return "N/A"
@@ -39,27 +43,29 @@ def get_best_ppl(eval_log_file):
     return f"{best_ppl:.2f}"
 
 def update_readme():
-    mamba1_tps = get_average_tps("logs/mamba1_metrics.csv")
-    mamba2_tps = get_average_tps("logs/mamba2_metrics.csv")
+    mamba1_tps = get_average_tps(os.path.join(LOGS_DIR, "mamba1_metrics.csv"))
+    mamba2_tps = get_average_tps(os.path.join(LOGS_DIR, "mamba2_metrics.csv"))
+    mamba3_tps = get_average_tps(os.path.join(LOGS_DIR, "mamba3_siso_metrics.csv"))
     
-    mamba1_ppl = get_best_ppl("logs/mamba1_metrics.csv")
-    mamba2_ppl = get_best_ppl("logs/mamba2_metrics.csv")
+    mamba1_ppl = get_best_ppl(os.path.join(LOGS_DIR, "mamba1_metrics.csv"))
+    mamba2_ppl = get_best_ppl(os.path.join(LOGS_DIR, "mamba2_metrics.csv"))
+    mamba3_ppl = get_best_ppl(os.path.join(LOGS_DIR, "mamba3_siso_metrics.csv"))
     
     table = (
         "## Model Leaderboard\n\n"
         "| Model | Throughput (TPS) | Validation PPL |\n"
         "| :--- | :--- | :--- |\n"
         f"| Vanilla Mamba | {mamba1_tps} | {mamba1_ppl} |\n"
-        f"| Mamba-2 | {mamba2_tps} | {mamba2_ppl} |\n\n"
+        f"| Mamba-2 | {mamba2_tps} | {mamba2_ppl} |\n"
+        f"| Mamba-3 SISO | {mamba3_tps} | {mamba3_ppl} |\n\n"
     )
     
-    readme_path = "README.md"
-    if not os.path.exists(readme_path):
-        with open(readme_path, "w") as f:
+    if not os.path.exists(README_PATH):
+        with open(README_PATH, "w") as f:
             f.write("# Mamba Review\n\n" + table)
         return
         
-    with open(readme_path, "r") as f:
+    with open(README_PATH, "r") as f:
         content = f.read()
         
     pattern = r"## Model Leaderboard\n\n.*?\|.*?\n(?:\|.*?\n)*\n?"
@@ -68,7 +74,7 @@ def update_readme():
     else:
         content = content.rstrip() + "\n\n" + table
         
-    with open(readme_path, "w") as f:
+    with open(README_PATH, "w") as f:
         f.write(content)
         
     print("Leaderboard updated in README.md")

@@ -2,6 +2,10 @@ import os
 import csv
 import matplotlib.pyplot as plt
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOGS_DIR = os.path.join(REPO_ROOT, "logs")
+RESULTS_DIR = os.path.join(REPO_ROOT, "results")
+
 def read_metrics(csv_path):
     if not os.path.exists(csv_path):
         return [], []
@@ -21,8 +25,8 @@ def read_metrics(csv_path):
     return tokens, ppls
 
 def main():
-    m1_tokens, m1_ppls = read_metrics(os.path.join("logs", "mamba1_metrics.csv"))
-    m2_tokens, m2_ppls = read_metrics(os.path.join("logs", "mamba2_metrics.csv"))
+    m1_tokens, m1_ppls = read_metrics(os.path.join(LOGS_DIR, "mamba1_metrics.csv"))
+    m2_tokens, m2_ppls = read_metrics(os.path.join(LOGS_DIR, "mamba2_metrics.csv"))
     
     if not m1_tokens and not m2_tokens:
         print("No validation perplexity data found to plot.")
@@ -60,8 +64,8 @@ def main():
     plt.legend(frameon=True, facecolor='white', edgecolor='black', fontsize=11)
     plt.tight_layout()
     
-    os.makedirs("results", exist_ok=True)
-    out_path = os.path.join("results", "ppl_comparison.png")
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    out_path = os.path.join(RESULTS_DIR, "ppl_comparison.png")
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     print(f"Plot saved successfully to {out_path}")
 

@@ -5,6 +5,8 @@ from tokenizers.trainers import BpeTrainer
 from tokenizers.pre_tokenizers import Whitespace
 from datasets import load_dataset
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 VOCAB_SIZE = 4096
 BATCH_SIZE = 1000
 
@@ -48,7 +50,7 @@ def main():
     tokenizer.train_from_iterator(get_training_corpus(), trainer=trainer)
     
     # Save the tokenizer
-    save_path = "tokenizer_4k.json"
+    save_path = os.path.join(REPO_ROOT, "tokenizer_4k.json")
     tokenizer.save(save_path)
     print(f"Tokenizer saved to {save_path}")
     print(f"To use this in your training scripts, update VOCAB_SIZE={VOCAB_SIZE} and tokenizer.from_file('{save_path}')")
